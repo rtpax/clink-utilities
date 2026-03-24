@@ -25,7 +25,7 @@ local function get_reg_env(name)
     return value
 end
 
-clink.oncommand(function()
+clink.onendedit(function()
     local env_update = settings.get("rtpax.env_update")
     if env_update and type(env_update) == "string" then
         for var in string.gmatch(env_update, "%S+") do
