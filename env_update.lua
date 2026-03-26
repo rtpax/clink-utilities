@@ -1,5 +1,7 @@
 settings.add("rtpax.env_update", "http_proxy https_proxy no_proxy", "Keep local environment up to date with registry")
 
+local skipped_update = false
+
 local function get_env_from_reg(name, reg_path)
     local cmd = 'reg query "' .. reg_path .. '" /v "' .. name .. '" 2>nul'
     local handle = io.popen(cmd)
@@ -25,7 +27,7 @@ local function get_reg_env(name)
     return value
 end
 
-clink.onendedit(function()
+local function update_env_vars()
     local env_update = settings.get("rtpax.env_update")
     if env_update and type(env_update) == "string" then
         for var in string.gmatch(env_update, "%S+") do
@@ -36,5 +38,19 @@ clink.onendedit(function()
             end
         end
     end
+end
+
+clink.onendedit(function(line)
+    if not line or line:find("^%s*$") then
+        skipped_update = true
+        return
+    end
+    update_env_vars()
 end)
 
+clink.oncommand(function(command)
+    if skipped_update then
+        skipped_update = false
+        update_env_vars()
+    end
+end)
