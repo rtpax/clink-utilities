@@ -45,6 +45,7 @@ clink.onendedit(function(line)
         skipped_update = true
         return
     end
+    skipped_update = false
     update_env_vars()
 end)
 
