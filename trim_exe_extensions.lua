@@ -128,10 +128,10 @@ function contributor:generate(line_state, match_builder)
         return false
     end
 
-    local wc = line_state:getwordcount()
-    local cwi = line_state:getcommandwordindex()
-    -- Different Clink builds/reporting paths can differ by one in index base.
-    if (wc ~= cwi) and (wc ~= (cwi + 1)) then
+    -- Match the built-in exec generator behavior: it only runs for the first
+    -- word of the line.  Without internal APIs there isn't a reliable public
+    -- hook for argmatcher chaincommand exec completions.
+    if line_state:getwordcount() ~= 1 then
         return false
     end
 
