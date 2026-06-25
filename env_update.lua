@@ -43,10 +43,10 @@ end
 clink.onendedit(function(line)
     if not line or line:find("^%s*$") then
         skipped_update = true
-        return
+    else
+        skipped_update = false
+        update_env_vars()
     end
-    skipped_update = false
-    update_env_vars()
 end)
 
 clink.oncommand(function(command)

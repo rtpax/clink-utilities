@@ -1,6 +1,7 @@
 settings.add("rtpax.trim_exe", true, "Hide .exe extensions for commands")
 
 local system_exec_matches = clink._exec_matches
+local trim_multi_matches = false -- this has not been needed so far, and adds overhead, so only trim single matches for now. Can add later if needed.
 
 local function wrap_match_builder(original)
     local wrapper = { inner = original }
@@ -33,23 +34,20 @@ local function wrap_match_builder(original)
     end
 
     function wrapper:addmatches(matches, match_type)
-        return wrapper.inner:addmatches(matches, match_type)
-        -- if match_type then
-        --     print("match_type: " .. match_type)
-        --     for i, match in ipairs(matches) do
-        --         print("match: " .. match)
-        --     end
-        --     return wrapper.inner:addmatches(matches, match_type)
-        -- else
-        --     print("default match_type")
-        --     for i, m in ipairs(matches) do
-        --         if should_trim_exe(m.match) then
-        --             m.match = trim_exe(m.match)
-        --         end
-        --         print("match: " .. m.match)
-        --     end
-        --     return wrapper.inner:addmatches(matches)
-        -- end
+        if trim_multi_matches then
+            if match_type then
+                return wrapper.inner:addmatches(matches, match_type)
+            else
+                for i, m in ipairs(matches) do
+                    if should_trim_exe(m.match) then
+                        m.match = trim_exe(m.match)
+                    end
+                end
+                return wrapper.inner:addmatches(matches)
+            end
+        else
+            return wrapper.inner:addmatches(matches, match_type)
+        end
     end
 
     return wrapper
@@ -70,6 +68,7 @@ function interceptor:generate(line_state, match_builder)
     if line_state:getwordcount() == 1 then
         return rtpax_exec_matches(line_state, match_builder)
     end
+    return false -- let other generators handle it
 end
 
 clink._exec_matches = rtpax_exec_matches -- override the internal exec_matches function
