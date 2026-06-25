@@ -1,75 +1,143 @@
 settings.add("rtpax.trim_exe", true, "Hide .exe extensions for commands")
+settings.add("rtpax.trim_exe.debug", false, "Debug logging for trim_exe_extensions.lua")
 
-local system_exec_matches = clink._exec_matches
-local trim_multi_matches = false -- this has not been needed so far, and adds overhead, so only trim single matches for now. Can add later if needed.
+local function dprint(...)
+    if not settings.get("rtpax.trim_exe.debug") then
+        return
+    end
+    local parts = { "[trim_exe]" }
+    for i = 1, select("#", ...) do
+        parts[#parts + 1] = tostring(select(i, ...))
+    end
+    print(table.concat(parts, " "))
+end
 
-local function wrap_match_builder(original)
-    local wrapper = { inner = original }
+local function should_trim_exe(str)
+    return #str >= 5
+       and str:sub(-4):lower() == ".exe"
+       and not str:find("\\", 1, true)
+       and not str:find("/", 1, true)
+end
 
-    function should_trim_exe(str)
-        if #str >= 5 and str:sub(-4):lower() == ".exe" and not str:find("\\", 1, true) then
-            local index = str:find("\\", 1, true)
-            if index then -- don't trim ".exe" if found in directory
-                return false
-            else
-                if os.isfile(str) then
-                    return false
+local function trim_exe(str)
+    return str:sub(1, -5)
+end
+
+local function clone_match_with_trim(m, trimmed)
+    local c = {}
+    for k, v in pairs(m) do
+        c[k] = v
+    end
+    c.match = trimmed
+    if type(c.display) == "string" and should_trim_exe(c.display) then
+        c.display = trim_exe(c.display)
+    end
+    return c
+end
+
+local function get_environment_paths()
+    local paths = (os.getenv("path") or ""):explode(";")
+    for i = 1, #paths, 1 do
+        paths[i] = paths[i].."\\"
+    end
+    return paths
+end
+
+local function build_trimmed_exec_matches(line_state)
+    local ret = {}
+    local seen = {}
+
+    local word = line_state:getendword()
+    if word:find("\\", 1, true) or word:find("/", 1, true) then
+        return ret, seen
+    end
+
+    local paths = {}
+    if settings.get("exec.path") then
+        paths = get_environment_paths()
+    end
+
+    for _, dir in ipairs(paths) do
+        local pattern = dir..word.."*.exe"
+        for _, m in ipairs(clink.filematchesexact(pattern)) do
+            local name = m.match and (m.match:match("[^/\\]*[/\\]?$") or m.match)
+            if name and should_trim_exe(name) then
+                local trimmed = trim_exe(name)
+                local key = trimmed:lower()
+                if not seen[key] then
+                    seen[key] = true
+                    table.insert(ret, clone_match_with_trim(m, trimmed))
                 end
-                return true
             end
-        else
-            return false
         end
     end
 
-    function trim_exe(str)
-        return str:sub(1, -5)
-    end
-
-    function wrapper:addmatch(match, ...)
-        if should_trim_exe(match.match) then
-            match.match = trim_exe(match.match)
-        end
-        return wrapper.inner:addmatch(match, ...)
-    end
-
-    function wrapper:addmatches(matches, match_type)
-        if trim_multi_matches then
-            if match_type then
-                return wrapper.inner:addmatches(matches, match_type)
-            else
-                for i, m in ipairs(matches) do
-                    if should_trim_exe(m.match) then
-                        m.match = trim_exe(m.match)
-                    end
+    if settings.get("exec.cwd") then
+        local pattern = word.."*.exe"
+        for _, m in ipairs(clink.filematchesexact(pattern)) do
+            local name = m.match
+            if name and should_trim_exe(name) then
+                local trimmed = trim_exe(name)
+                local key = trimmed:lower()
+                if not seen[key] then
+                    seen[key] = true
+                    table.insert(ret, clone_match_with_trim(m, trimmed))
                 end
-                return wrapper.inner:addmatches(matches)
             end
-        else
-            return wrapper.inner:addmatches(matches, match_type)
         end
     end
 
-    return wrapper
+    return ret, seen
 end
 
-local function rtpax_exec_matches(line_state, match_builder, chained, no_aliases)
-    local do_trim = settings.get("rtpax.trim_exe")
-    if not do_trim or do_trim ~= true then
-        system_exec_matches(line_state, match_builder, chained, no_aliases)
-    else
-        system_exec_matches(line_state, wrap_match_builder(match_builder), chained, no_aliases)
+local contributor = clink.generator(23)
+function contributor:generate(line_state, match_builder)
+    if not settings.get("rtpax.trim_exe") then
+        return false
     end
-    return true
-end
 
-local interceptor = clink.generator(49) -- just barely high enough priority to run before exec_generator
-function interceptor:generate(line_state, match_builder)
-    if line_state:getwordcount() == 1 then
-        return rtpax_exec_matches(line_state, match_builder)
+    dprint("generate", line_state:getendword(), "wordcount", line_state:getwordcount(), "commandwordindex", line_state:getcommandwordindex())
+
+    local wc = line_state:getwordcount()
+    local cwi = line_state:getcommandwordindex()
+    -- Different Clink builds/reporting paths can differ by one in index base.
+    local is_command_word = (wc == cwi) or (wc == (cwi + 1))
+    if not is_command_word then
+        dprint("not command word")
+        return false
     end
-    return false -- let other generators handle it
-end
 
-clink._exec_matches = rtpax_exec_matches -- override the internal exec_matches function
--- TODO: make sure this gets set after exec.lua
+    dprint("is command word", line_state:getendword(), "wordcount", line_state:getwordcount(), "commandwordindex", line_state:getcommandwordindex())
+
+    local added, seen_trimmed = build_trimmed_exec_matches(line_state)
+    for _, m in ipairs(added) do
+        match_builder:addmatch(m)
+    end
+    dprint("word", line_state:getendword(), "added", #added)
+
+    -- onfiltermatches can remove entries but cannot add entries.
+    clink.onfiltermatches(function(matches)
+        if #added == 0 then
+            return
+        end
+        local out = {}
+        local removed = 0
+        for _, m in ipairs(matches) do
+            local drop = false
+            if type(m) == "table" and m.match and should_trim_exe(m.match) then
+                local key = trim_exe(m.match):lower()
+                if seen_trimmed[key] then
+                    drop = true
+                    removed = removed + 1
+                end
+            end
+            if not drop then
+                table.insert(out, m)
+            end
+        end
+        dprint("removed exe", removed)
+        return out
+    end)
+
+    return false
+end
